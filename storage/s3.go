@@ -40,6 +40,9 @@ const (
 
 	// Google Cloud Storage endpoint
 	gcsEndpoint = "storage.googleapis.com"
+
+	// Bucket region header
+	bucketRegionHeader = "X-Amz-Bucket-Region"
 )
 
 // Re-used AWS sessions dramatically improve performance.
@@ -702,22 +705,46 @@ func setSessionRegion(ctx context.Context, sess *session.Session, bucket string)
 		return nil
 	}
 
-	region, err := s3manager.GetBucketRegion(ctx, sess, bucket, "", func(r *request.Request) {
-		r.Config.Credentials = sess.Config.Credentials
+	svc := s3.New(sess)
+	req, _ := svc.HeadBucketRequest(&s3.HeadBucketInput{
+		Bucket: aws.String(bucket),
 	})
-	if err != nil {
-		if errHasCode(err, "NotFound") {
-			return err
+	req.SetContext(ctx)
+
+	// Disable HTTP redirects to prevent an invalid 301 from eating the response
+	// because Go's HTTP client will fail, and drop the response if an 301 is
+	// received without a location header. S3 will return a 301 without the
+	// location header for HeadObject API calls.
+	req.DisableFollowRedirects = true
+
+	var bucketRegion string
+	req.Handlers.Send.PushBack(func(r *request.Request) {
+		bucketRegion = r.HTTPResponse.Header.Get(bucketRegionHeader)
+	})
+	if err := req.Send(); err != nil {
+		if IsCancelationError(err) {
+			return nil
 		}
+
 		// don't deny any request to the service if region auto-fetching
 		// receives an error. Delegate error handling to command execution.
 		err = fmt.Errorf("session: fetching region failed: %v", err)
 		msg := log.ErrorMessage{Err: err.Error()}
-		log.Error(msg)
-	} else {
-		sess.Config.Region = aws.String(region)
+		log.Debug(msg)
+	} else if len(bucketRegion) != 0 {
+		normalizedRegion := normalizeRegion(bucketRegion)
+		sess.Config.Region = aws.String(normalizedRegion)
 	}
 	return nil
+}
+
+func normalizeRegion(region string) string {
+	switch region {
+	case "EU":
+		return "eu-west-1"
+	default:
+		return region
+	}
 }
 
 // customRetryer wraps the SDK's built in DefaultRetryer adding additional

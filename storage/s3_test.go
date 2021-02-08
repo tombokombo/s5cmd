@@ -744,7 +744,7 @@ func TestSessionAutoRegionValidateCredentials(t *testing.T) {
 	awsSess.Handlers.Send.Clear()
 	awsSess.Handlers.Send.PushBack(func(r *request.Request) {
 		header := http.Header{}
-		header.Set("X-Amz-Bucket-Region", "")
+		header.Set(bucketRegionHeader, "")
 		r.HTTPResponse = &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     header,
@@ -798,13 +798,6 @@ func TestSessionAutoRegion(t *testing.T) {
 			expectedRegion: "us-west-2",
 		},
 		{
-			name:              "BucketNotFoundErrorMustFail",
-			bucket:            "bucket",
-			status:            http.StatusNotFound,
-			expectedRegion:    "us-east-1",
-			expectedErrorCode: "NotFound",
-		},
-		{
 			name:           "AccessDeniedErrorMustNotFail",
 			bucket:         "bucket",
 			status:         http.StatusForbidden,
@@ -820,7 +813,7 @@ func TestSessionAutoRegion(t *testing.T) {
 			awsSess.Handlers.Send.PushBack(func(r *request.Request) {
 				header := http.Header{}
 				if tc.region != "" {
-					header.Set("X-Amz-Bucket-Region", tc.region)
+					header.Set(bucketRegionHeader, tc.region)
 				}
 				r.HTTPResponse = &http.Response{
 					StatusCode: tc.status,
