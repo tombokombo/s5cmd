@@ -3,10 +3,13 @@ package command
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 
+	"github.com/hashicorp/go-multierror"
 	"github.com/urfave/cli/v2"
 
+	errorpkg "github.com/peak/s5cmd/error"
 	"github.com/peak/s5cmd/log/stat"
 	"github.com/peak/s5cmd/parallel"
 	"github.com/peak/s5cmd/storage"
@@ -97,50 +100,68 @@ func (s Select) Run(ctx context.Context) error {
 		return err
 	}
 
-	// TODO: fix prefix support?
 	objch, err := expandSource(ctx, client, false, srcurl)
 	if err != nil {
 		printError(s.fullCommand, s.op, err)
 		return err
 	}
 
-	err = s.doSelect(ctx, objch)
-	if err != nil {
-		printError(s.fullCommand, s.op, err)
+	var merror error
+
+	waiter := parallel.NewWaiter()
+	errDoneCh := make(chan bool)
+
+	go func() {
+		defer close(errDoneCh)
+		for err := range waiter.Err() {
+			printError(s.fullCommand, s.op, err)
+			merror = multierror.Append(merror, err)
+		}
+	}()
+
+	for object := range objch {
+		if object.Type.IsDir() || errorpkg.IsCancelation(object.Err) {
+			continue
+		}
+
+		if err := object.Err; err != nil {
+			printError(s.fullCommand, s.op, err)
+			continue
+		}
+
+		if object.StorageClass.IsGlacier() {
+			err := fmt.Errorf("object '%v' is on Glacier storage", object)
+			printError(s.fullCommand, s.op, err)
+			continue
+		}
+
+		task := s.prepareTask(ctx, client, object.URL)
+		parallel.Run(task, waiter)
 	}
-	return err
+
+	waiter.Wait()
+	<-errDoneCh
+
+	return merror
 }
 
-// doSelect
-func (s Select) doSelect(ctx context.Context, objch <-chan *storage.Object) error {
-	// set as remote storage
-	url := &url.URL{Type: 0}
-	client, err := storage.NewRemoteClient(ctx, url, s.storageOpts)
-	if err != nil {
+func (s Select) prepareTask(ctx context.Context, client *storage.S3, url *url.URL) func() error {
+	return func() error {
+		query := &storage.SelectQuery{
+			ExpressionType:  "SQL",
+			Expression:      s.query,
+			CompressionType: s.compressionType,
+		}
+
+		rc, err := client.Select(ctx, url, query, os.Stdout)
+		if err != nil {
+			return err
+		}
+		defer rc.Close()
+
+		_, err = io.Copy(os.Stdout, rc)
 		return err
 	}
-
-	query := storage.Query{
-		ExpressionType:  "SQL",
-		Expression:      s.query,
-		CompressionType: s.compressionType,
-	}
-	err = client.Select(ctx, objch, os.Stdout, &query, parallel.Size())
-	if err != nil {
-		return err
-	}
-
-	// msg := log.InfoMessage{
-	// 	Operation:   c.op,
-	// 	Source:      srcurl,
-	// 	Destination: dsturl,
-	// 	Object: &storage.Object{
-	// 		Size: size,
-	// 	},
-	// }
-	// log.Info(msg)
-
-	return nil
 }
 
 func validateSelectCommand(c *cli.Context) error {

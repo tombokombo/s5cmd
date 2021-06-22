@@ -27,7 +27,6 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3/s3iface"
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
 	"github.com/aws/aws-sdk-go/service/s3/s3manager/s3manageriface"
-	"github.com/hashicorp/go-multierror"
 	"github.com/peak/s5cmd/log"
 	"github.com/peak/s5cmd/storage/url"
 )
@@ -391,114 +390,23 @@ type SelectRecord struct {
 	Err    error
 }
 
-func (s *S3) selectStream(resp *s3.SelectObjectContentOutput, resultch chan<- *SelectRecord) {
-	defer resp.EventStream.Close()
-
-	reader, writer := io.Pipe()
-	defer reader.Close()
-	go func() {
-		defer writer.Close()
-		// TODO: wire ctx up to eventStream.StreamCloser.Close
-		for event := range resp.EventStream.Reader.Events() {
-			switch e := event.(type) {
-			case *s3.RecordsEvent:
-				// TODO: how should we handle errors here?!
-				writer.Write(e.Payload)
-			// How the heck are these different?
-			case *s3.StatsEvent:
-			case *s3.ProgressEvent:
-			}
-		}
-	}()
-
-	decoder := json.NewDecoder(reader)
-	// decoder.DontCopyRawMessage()
-	for {
-		var record json.RawMessage
-		err := decoder.Decode(&record)
-		if err != nil {
-			if err != io.EOF {
-				resultch <- &SelectRecord{
-					Err: err,
-				}
-			}
-			return
-		}
-		resultch <- &SelectRecord{
-			Record: record,
-		}
-	}
-	err := resp.EventStream.Err()
-	if err != nil {
-		resultch <- &SelectRecord{
-			Err: err,
-		}
-	}
-}
-
-func (s *S3) selectWorker(ctx context.Context, input s3.SelectObjectContentInput, objch <-chan *Object, resultch chan<- *SelectRecord) {
-	for object := range objch {
-		// TODO: reintroduce
-		if object.Type.IsDir() { // || errorpkg.IsCancelation(object.Err) {
-			continue
-		}
-
-		if err := object.Err; err != nil {
-			resultch <- &SelectRecord{
-				Err: object.Err,
-			}
-			continue
-		}
-
-		if object.StorageClass.IsGlacier() {
-			// TODO: this isn't fatal - how to signal?
-			resultch <- &SelectRecord{
-				Err: fmt.Errorf("object '%v' is on Glacier storage", object),
-			}
-			continue
-		}
-
-		url := object.URL
-		input.Bucket = aws.String(url.Bucket)
-		input.Key = aws.String(url.Path)
-
-		out, err := s.api.SelectObjectContentWithContext(ctx, &input)
-		if err != nil {
-			resultch <- &SelectRecord{
-				Err: err,
-			}
-		} else {
-			s.selectStream(out, resultch)
-		}
-	}
-}
-
-type Query struct {
+type SelectQuery struct {
 	ExpressionType  string
 	Expression      string
 	CompressionType string
 }
 
-func writev(to io.Writer, vector ...[]byte) (err error) {
-	for _, vec := range vector {
-		_, err = to.Write(vec)
-		if err != nil {
-			break
-		}
-	}
-	return
-}
-
-func (s *S3) Select(ctx context.Context, objch <-chan *Object, to io.Writer, query *Query, concurrency int) error {
+func (s *S3) Select(ctx context.Context, url *url.URL, query *SelectQuery, to io.Writer) (io.ReadCloser, error) {
 	if s.dryRun {
-		return nil
+		return nil, nil
 	}
 
-	baseInput := s3.SelectObjectContentInput{
+	input := &s3.SelectObjectContentInput{
+		Bucket:         aws.String(url.Bucket),
+		Key:            aws.String(url.Path),
 		ExpressionType: aws.String(query.ExpressionType),
 		Expression:     aws.String(query.Expression),
 		InputSerialization: &s3.InputSerialization{
-			CompressionType: aws.String(query.CompressionType),
 			JSON: &s3.JSONInput{
 				Type: aws.String("Lines"),
 			},
@@ -506,53 +414,43 @@ func (s *S3) Select(ctx context.Context, objch <-chan *Object, to io.Writer, que
 		OutputSerialization: &s3.OutputSerialization{
 			JSON: &s3.JSONOutput{},
 		},
-		// RequestProgress: &s3.RequestProgress{
-		// 	// TODO: conditionally enable? for larger objects? ?
-		// 	Enabled: false,
-		// },
 	}
 
-	workerCtx, cancel := context.WithCancel(ctx)
-
-	resultch := make(chan *SelectRecord, concurrency)
-	var wg sync.WaitGroup
-	wg.Add(concurrency)
-	for worker := 0; worker < concurrency; worker++ {
-		go func() {
-			defer wg.Done()
-			s.selectWorker(workerCtx, baseInput, objch, resultch)
-		}()
+	if query.CompressionType != "" {
+		input.InputSerialization.CompressionType = aws.String(query.CompressionType)
 	}
+
+	resp, err := s.api.SelectObjectContentWithContext(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+
+	reader, writer := io.Pipe()
 
 	go func() {
-		defer close(resultch)
-		wg.Wait()
-	}()
-	// go func() {
-	// 	s.selectWorker(workerCtx, baseInput, objch, resultch)
-	// 	close(resultch)
-	// }()
+		defer writer.Close()
 
-	var merror error
-	var fatalError error
-	for record := range resultch {
-		if record.Err == nil {
-			if fatalError != nil {
-				continue
+		eventch := resp.EventStream.Reader.Events()
+		defer resp.EventStream.Close()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case event, ok := <-eventch:
+				if !ok {
+					return
+				}
+
+				switch e := event.(type) {
+				case *s3.RecordsEvent:
+					writer.Write(e.Payload)
+				}
 			}
-			if err := writev(to, record.Record, []byte{'\n'}); err != nil {
-				cancel()
-				fatalError = err
-				os.Stderr.Write([]byte(fmt.Sprintf("error writing: %v\n", err)))
-			}
-			// TODO: reinstate
-		} else if !IsCancelationError(record.Err) { //if !errorpkg.IsCancelation(record.Err) {
-			cancel()
-			merror = multierror.Append(merror, record.Err)
 		}
-	}
+	}()
 
-	return merror
+	return reader, nil
 }
 
 // Put is a multipart upload operation to upload resources, which implements
