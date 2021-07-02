@@ -1,6 +1,10 @@
 # Changelog
 
-## not released yet
+## v1.3.0 - 1 Jul 2021
+
+#### Features
+
+- Added global `--no-sign-request` flag. API requests won't be signed and credentials won't be used if this option is provided. It is useful for accessing public buckets. ([#285](https://github.com/peak/s5cmd/issues/285))
 
 #### Improvements
 
