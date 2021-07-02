@@ -53,6 +53,7 @@ func NewRemoteClient(ctx context.Context, url *url.URL, opts Options) (*S3, erro
 		NoVerifySSL: opts.NoVerifySSL,
 		DryRun:      opts.DryRun,
 		bucket:      url.Bucket,
+		Region:      opts.Region,
 	}
 	return newS3Storage(ctx, newOpts)
 }
@@ -71,6 +72,7 @@ type Options struct {
 	NoVerifySSL bool
 	DryRun      bool
 	bucket      string
+	Region      string
 }
 
 // Object is a generic type which contains metadata for storage items.

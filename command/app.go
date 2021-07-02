@@ -43,6 +43,10 @@ var app = &cli.App{
 			Name:  "endpoint-url",
 			Usage: "override default S3 host for custom services",
 		},
+		&cli.StringFlag{
+			Name:  "region",
+			Usage: "override S3 region",
+		},
 		&cli.BoolFlag{
 			Name:  "no-verify-ssl",
 			Usage: "disable SSL certificate verification",
@@ -133,6 +137,7 @@ func NewStorageOpts(c *cli.Context) storage.Options {
 		Endpoint:    c.String("endpoint-url"),
 		NoVerifySSL: c.Bool("no-verify-ssl"),
 		DryRun:      c.Bool("dry-run"),
+		Region:      c.String("region"),
 	}
 }
 

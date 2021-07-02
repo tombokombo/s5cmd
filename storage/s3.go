@@ -55,6 +55,7 @@ type S3 struct {
 	uploader    s3manageriface.UploaderAPI
 	endpointURL urlpkg.URL
 	dryRun      bool
+	region      string
 }
 
 func parseEndpoint(endpoint string) (urlpkg.URL, error) {
@@ -92,6 +93,7 @@ func newS3Storage(ctx context.Context, opts Options) (*S3, error) {
 		uploader:    s3manager.NewUploader(awsSession),
 		endpointURL: endpointURL,
 		dryRun:      opts.DryRun,
+		region:      opts.Region,
 	}, nil
 }
 
@@ -678,7 +680,7 @@ func (sc *SessionCache) newSession(ctx context.Context, opts Options) (*session.
 	// get region of the bucket and create session accordingly. if the region
 	// is not provided, it means we want region-independent session
 	// for operations such as listing buckets, making a new bucket etc.
-	if err := setSessionRegion(ctx, sess, opts.bucket); err != nil {
+	if err := setSessionRegion(ctx, sess, opts.bucket, opts.Region); err != nil {
 		return nil, err
 	}
 
@@ -693,7 +695,11 @@ func (sc *SessionCache) clear() {
 	sc.sessions = map[Options]*session.Session{}
 }
 
-func setSessionRegion(ctx context.Context, sess *session.Session, bucket string) error {
+func setSessionRegion(ctx context.Context, sess *session.Session, bucket string, region string) error {
+	if region != "" {
+		sess.Config.Region = aws.String(region)
+		return nil
+	}
 	if aws.StringValue(sess.Config.Region) == "" {
 		sess.Config.Region = aws.String(endpoints.UsEast1RegionID)
 	}
