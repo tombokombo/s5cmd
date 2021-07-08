@@ -131,6 +131,14 @@ var copyCommandFlags = []cli.Flag{
 		Name:  "acl",
 		Usage: "set acl for target: defines granted accesses and their types on different accounts/groups",
 	},
+	&cli.StringFlag{
+		Name:  "cache-control",
+		Usage: "set cache control for target: defines cache control header for object",
+	},
+	&cli.StringFlag{
+		Name:  "expires",
+		Usage: "set expires for target: defines expires header for object",
+	},
 }
 
 var copyCommand = &cli.Command{
@@ -167,6 +175,8 @@ var copyCommand = &cli.Command{
 			encryptionMethod: c.String("sse"),
 			encryptionKeyID:  c.String("sse-kms-key-id"),
 			acl:              c.String("acl"),
+			cacheControl:     c.String("cache-control"),
+			expires:          c.String("expires"),
 
 			storageOpts: NewStorageOpts(c),
 		}.Run(c.Context)
@@ -192,6 +202,8 @@ type Copy struct {
 	encryptionMethod string
 	encryptionKeyID  string
 	acl              string
+	cacheControl     string
+	expires          string
 
 	// s3 options
 	concurrency int
@@ -440,7 +452,9 @@ func (c Copy) doUpload(ctx context.Context, srcurl *url.URL, dsturl *url.URL) er
 		SetStorageClass(string(c.storageClass)).
 		SetSSE(c.encryptionMethod).
 		SetSSEKeyID(c.encryptionKeyID).
-		SetACL(c.acl)
+		SetACL(c.acl).
+		SetCacheControl(c.cacheControl).
+		SetExpires(c.expires)
 
 	err = dstClient.Put(ctx, file, dsturl, metadata, c.concurrency, c.partSize)
 	if err != nil {
@@ -482,7 +496,9 @@ func (c Copy) doCopy(ctx context.Context, srcurl, dsturl *url.URL) error {
 		SetStorageClass(string(c.storageClass)).
 		SetSSE(c.encryptionMethod).
 		SetSSEKeyID(c.encryptionKeyID).
-		SetACL(c.acl)
+		SetACL(c.acl).
+		SetCacheControl(c.cacheControl).
+		SetExpires(c.expires)
 
 	err = c.shouldOverride(ctx, srcurl, dsturl)
 	if err != nil {
