@@ -43,6 +43,10 @@ var app = &cli.App{
 			Name:  "endpoint-url",
 			Usage: "override default S3 host for custom services",
 		},
+		&cli.StringFlag{
+			Name:  "region",
+			Usage: "override S3 region",
+		},
 		&cli.BoolFlag{
 			Name:  "no-verify-ssl",
 			Usage: "disable SSL certificate verification",
@@ -132,13 +136,15 @@ var app = &cli.App{
 
 // NewStorageOpts creates storage.Options object from the given context.
 func NewStorageOpts(c *cli.Context) storage.Options {
-	return storage.Options{
+	opts := storage.Options{
 		MaxRetries:    c.Int("retry-count"),
 		Endpoint:      c.String("endpoint-url"),
 		NoVerifySSL:   c.Bool("no-verify-ssl"),
 		DryRun:        c.Bool("dry-run"),
 		NoSignRequest: c.Bool("no-sign-request"),
 	}
+	opts.SetRegion(c.String("region"))
+	return opts
 }
 
 // Main is the entrypoint function to run given commands.

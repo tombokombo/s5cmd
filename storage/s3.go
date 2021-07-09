@@ -86,7 +86,6 @@ func newS3Storage(ctx context.Context, opts Options) (*S3, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	return &S3{
 		api:         s3.New(awsSession),
 		downloader:  s3manager.NewDownloader(awsSession),
@@ -700,7 +699,7 @@ func (sc *SessionCache) newSession(ctx context.Context, opts Options) (*session.
 	if opts.region != "" {
 		sess.Config.Region = aws.String(opts.region)
 	} else {
-		if err := setSessionRegion(ctx, sess, opts.bucket); err != nil {
+		if err := setSessionRegion(ctx, sess, opts.bucket, opts.region); err != nil {
 			return nil, err
 		}
 	}
@@ -716,7 +715,12 @@ func (sc *SessionCache) clear() {
 	sc.sessions = map[Options]*session.Session{}
 }
 
-func setSessionRegion(ctx context.Context, sess *session.Session, bucket string) error {
+func setSessionRegion(ctx context.Context, sess *session.Session, bucket string, region string) error {
+	if region != "" {
+		sess.Config.Region = aws.String(region)
+		return nil
+	}
+
 	if aws.StringValue(sess.Config.Region) == "" {
 		sess.Config.Region = aws.String(endpoints.UsEast1RegionID)
 	}
